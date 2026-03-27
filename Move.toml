@@ -1,0 +1,9 @@
+[package]
+name = "sui_inpact_contract"
+edition = "2024.beta"
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "main" }
+
+[addresses]
+sui_inpact = "0x0"
