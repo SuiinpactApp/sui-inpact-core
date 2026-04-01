@@ -14,6 +14,7 @@ const E_INVALID_SPLIT_PCT: u64 = 11;
 const E_ALREADY_JOINED: u64 = 13;
 const E_INVALID_PROOF: u64 = 15;
 const E_MISSING_COMMITMENT: u64 = 16;
+const E_TOO_MANY_PROOFS: u64 = 17;
 
 const PROOF_FUNDING: u8 = 1;
 const PROOF_RELEASE: u8 = 2;
@@ -21,6 +22,7 @@ const PROOF_SPLIT: u8 = 3;
 const PROOF_REFUND: u8 = 4;
 const ROLE_BUYER: u8 = 1;
 const ROLE_DEVELOPER: u8 = 2;
+const MAX_PROOFS: u64 = 10;
 
 public enum Status has copy, drop, store {
     Draft,
@@ -41,7 +43,7 @@ public struct PaymentProof has copy, drop, store {
     recorded_at_ms: u64,
 }
 
-public struct OperatorCap has key, store {
+public struct OperatorCap has key {
     id: UID,
 }
 
@@ -115,6 +117,10 @@ public struct PaymentProofRecorded has copy, drop {
     recorded_at_ms: u64,
 }
 
+public struct OperatorTransferred has copy, drop {
+    new_operator: address
+}
+
 fun escrow_id(escrow: &Escrow): ID {
     object::id(escrow)
 }
@@ -171,6 +177,7 @@ fun record_payment_proof(
 ) {
     assert!(amount > 0, E_INVALID_AMOUNT);
     assert!(vector::length(&ciphertext) > 0, E_INVALID_PROOF);
+    assert!(vector::length(&escrow.payment_proofs) < MAX_PROOFS, E_TOO_MANY_PROOFS);
     vector::push_back(&mut escrow.payment_proofs, PaymentProof {
         kind: proof_kind,
         amount,
@@ -192,6 +199,15 @@ fun init(ctx: &mut TxContext) {
     );
 }
 
+public fun transfer_operator_cap(
+    cap: OperatorCap,
+    new_operator: address,
+    _ctx: &TxContext
+) {
+    event::emit(OperatorTransferred { new_operator });
+    transfer::transfer(cap, new_operator);
+}
+
 public fun create_draft(
     cap: &OperatorCap,
     buyer_commitment: vector<u8>,
@@ -207,6 +223,7 @@ public fun create_draft(
     assert!(amount > 0, E_INVALID_AMOUNT);
     assert!(vector::length(&buyer_commitment) > 0, E_MISSING_COMMITMENT);
     assert!(vector::length(&developer_commitment) > 0, E_MISSING_COMMITMENT);
+    assert!(join_expiry_ms > now_ms, E_JOIN_EXPIRED);
 
     let escrow = Escrow {
         id: object::new(ctx),
@@ -326,6 +343,7 @@ public fun approve_mutual_release_buyer(
 ) {
     assert_operator(cap, ctx);
     move_to_resolving(escrow);
+    assert!(has_joined(escrow), E_ALREADY_JOINED);
     escrow.mutual_release_approved_buyer = true;
     reset_mutual_split(escrow);
     event::emit(MutualReleaseApproved {
@@ -446,7 +464,7 @@ public fun record_refund_proof(
     ctx: &TxContext
 ) {
     assert_operator(cap, ctx);
-    assert!(is_status(escrow, Status::Refund_Unmatched) || is_status(escrow, Status::Partially_Funded), E_INVALID_STATUS);
+    assert!(is_status(escrow, Status::Refund_Unmatched), E_INVALID_STATUS);
     assert!(amount == escrow.amount, E_INVALID_AMOUNT);
     record_payment_proof(
         escrow,
@@ -472,7 +490,7 @@ public fun record_split_proof(
     assert_valid_split_pct(buyer_share_pct);
     assert!(is_status(escrow, Status::Settled_Split), E_INVALID_STATUS);
     assert!(amount == escrow.amount, E_INVALID_AMOUNT);
-    escrow.settlement_buyer_share_pct = option::some(buyer_share_pct);
+    assert!(option::is_some(&escrow.settlement_buyer_share_pct) && *option::borrow(&escrow.settlement_buyer_share_pct) == buyer_share_pct, E_MUTUAL_APPROVAL_MISMATCH);
     record_payment_proof(
         escrow,
         PROOF_SPLIT,
